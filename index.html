@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>INTELLIGESTURE - Gesture Telematics</title>
+    
+    <!-- MediaPipe & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    
+    <!-- Paho MQTT via WebSockets -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" crossorigin="anonymous"></script>
+    
+    <style>
+        :root {
+            --bg-dark: #0a0d14;
+            --card-bg: rgba(18, 24, 38, 0.85);
+            --border: #1f2a44;
+            --accent-cyan: #00f2fe;
+            --accent-green: #00e676;
+            --accent-red: #ff1744;
+            --accent-blue: #2979ff;
+            --accent-purple: #d500f9;
+            --text-main: #f0f4f8;
+            --text-dim: #8292a2;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, -apple-system, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            transition: background-color 0.25s ease;
+        }
+
+        /* Virtual Ring Light mode for nighttime illumination */
+        body.night-light-on {
+            background-color: #ffffff !important;
+            box-shadow: inset 0 0 180px 90px #ffffff;
+            color: #0f172a !important;
+        }
+
+        body.night-light-on header h1 {
+            color: #0284c7 !important;
+        }
+
+        body.night-light-on header p {
+            color: #475569 !important;
+        }
+
+        body.night-light-on .panel,
+        body.night-light-on .video-card {
+            background: #ffffff !important;
+            border: 2px solid #cbd5e1 !important;
+            box-shadow: 0 10px 35px rgba(0, 0, 0, 0.1) !important;
+        }
+
+        body.night-light-on .command-display {
+            background: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+        }
+
+        body.night-light-on .telemetry-row {
+            border-bottom: 1px dashed #cbd5e1 !important;
+        }
+
+        body.night-light-on .telemetry-val {
+            color: #0f172a !important;
+        }
+
+        body.night-light-on .pad-btn {
+            background: #f1f5f9 !important;
+            color: #334155 !important;
+            border-color: #cbd5e1 !important;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        header h1 {
+            font-size: 2rem;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--accent-cyan);
+            margin-bottom: 6px;
+        }
+
+        header p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 24px;
+            max-width: 1100px;
+            width: 100%;
+        }
+
+        @media (max-width: 900px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .video-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 16px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            max-width: 640px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        video { display: none; }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        .status-badge {
+            position: absolute;
+            top: 28px;
+            left: 28px;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(8px);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 10;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent-red);
+        }
+
+        .dot.active {
+            background: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green);
+        }
+
+        .panel {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        button.start-btn {
+            background: linear-gradient(135deg, #00f2fe, #4facfe);
+            border: none;
+            color: #050b14;
+            font-size: 1rem;
+            font-weight: 700;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.2s;
+        }
+
+        button.start-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 242, 254, 0.4);
+        }
+
+        button.tool-btn {
+            background: #192338;
+            border: 1px solid var(--border);
+            color: var(--accent-cyan);
+            font-size: 0.85rem;
+            font-weight: 600;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        button.tool-btn:hover {
+            background: #223150;
+            border-color: var(--accent-cyan);
+        }
+
+        .command-display {
+            text-align: center;
+            padding: 16px;
+            background: #0f1624;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .command-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        .command-value {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--accent-cyan);
+            text-shadow: 0 0 15px rgba(0, 242, 254, 0.4);
+        }
+
+        .cmd-FORWARD { color: var(--accent-green) !important; text-shadow: 0 0 15px rgba(0, 230, 118, 0.5) !important; }
+        .cmd-STOP { color: var(--accent-red) !important; text-shadow: 0 0 15px rgba(255, 23, 68, 0.5) !important; }
+        .cmd-LEFT, .cmd-RIGHT { color: var(--accent-blue) !important; text-shadow: 0 0 15px rgba(41, 121, 255, 0.5) !important; }
+        .cmd-SPIN_LEFT, .cmd-SPIN_RIGHT { color: var(--accent-purple) !important; text-shadow: 0 0 15px rgba(213, 0, 249, 0.5) !important; }
+
+        .d-pad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-gap: 8px;
+            max-width: 230px;
+            margin: 0 auto;
+        }
+
+        .pad-btn {
+            background: #141c2e;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 10px 4px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 0.8rem;
+            transition: all 0.15s ease;
+        }
+
+        .pad-btn.active {
+            background: var(--accent-cyan);
+            color: #000;
+            box-shadow: 0 0 12px var(--accent-cyan);
+        }
+
+        .pad-btn.spin-active {
+            background: var(--accent-purple) !important;
+            color: #fff !important;
+            box-shadow: 0 0 12px var(--accent-purple) !important;
+        }
+
+        .telemetry {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 0.82rem;
+            color: var(--text-dim);
+        }
+
+        .telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+        }
+
+        .telemetry-val {
+            font-family: monospace;
+            color: var(--text-main);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>INTELLIGESTURE CONTROLLER</h1>
+        <p>Real-time client-side face & eye telematics using MediaPipe</p>
+    </header>
+
+    <div class="dashboard">
+        <div class="video-card">
+            <div class="canvas-container">
+                <video id="webcam" playsinline></video>
+                <canvas id="output_canvas"></canvas>
+            </div>
+            <div class="status-badge">
+                <div class="dot" id="status-dot"></div>
+                <span id="status-text">Camera Inactive</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="btn-group">
+                <button class="start-btn" id="start-btn" onclick="toggleCamera()">Start Camera</button>
+                <button class="tool-btn" id="calib-btn" onclick="calibratePosture()">Set Current as Normal (Center)</button>
+                <button class="tool-btn" id="night-btn" onclick="toggleNightLight()">💡 Night Light: OFF</button>
+            </div>
+
+            <div class="command-display" id="command-box">
+                <div class="command-title">Current Action</div>
+                <div class="command-value" id="command-text">IDLE</div>
+            </div>
+
+            <div class="d-pad">
+                <div class="pad-btn" id="pad-spin-left">↺ SPIN L</div>
+                <div class="pad-btn" id="pad-forward">▲ FWD</div>
+                <div class="pad-btn" id="pad-spin-right">↻ SPIN R</div>
+                
+                <div class="pad-btn" id="pad-left">◀ LEFT</div>
+                <div class="pad-btn" id="pad-stop">■ STOP</div>
+                <div class="pad-btn" id="pad-right">RIGHT ▶</div>
+            </div>
+
+            <div class="telemetry">
+                <div class="telemetry-row">
+                    <span>MQTT Broker:</span>
+                    <span class="telemetry-val" id="val-mqtt" style="color: #ff1744;">Disconnected</span>
+                </div>
+                <div class="telemetry-row">
+                    <span>Eye State:</span>
+                    <span class="telemetry-val" id="val-eye">--</span>
+                </div>
+                <div class="telemetry-row">
+                    <span>Horizontal Turn:</span>
+                    <span class="telemetry-val" id="val-yaw">CENTER</span>
+                </div>
+                <div class="telemetry-row">
+                    <span>Vertical Pitch:</span>
+                    <span class="telemetry-val" id="val-pitch">LEVEL</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const commandText = document.getElementById('command-text');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const startBtn = document.getElementById('start-btn');
+        const calibBtn = document.getElementById('calib-btn');
+        const nightBtn = document.getElementById('night-btn');
+
+        const valMqtt = document.getElementById('val-mqtt');
+        const valEye = document.getElementById('val-eye');
+        const valYaw = document.getElementById('val-yaw');
+        const valPitch = document.getElementById('val-pitch');
+
+        const padForward = document.getElementById('pad-forward');
+        const padLeft = document.getElementById('pad-left');
+        const padRight = document.getElementById('pad-right');
+        const padStop = document.getElementById('pad-stop');
+        const padSpinLeft = document.getElementById('pad-spin-left');
+        const padSpinRight = document.getElementById('pad-spin-right');
+
+        let camera = null;
+        let isRunning = false;
+        let isNightLightOn = false;
+
+        let baselineYaw = 0.50;
+        let baselinePitch = 0.58; 
+
+        let smoothEAR = 0.25;
+        let smoothYaw = 0.50;
+        let smoothPitch = 0.58;
+        const SMOOTH_FACTOR = 0.35;
+
+        let activeCommand = "STOP";
+        let candidateCommand = "STOP";
+        let candidateCount = 0;
+        const REQUIRED_CONSECUTIVE_FRAMES = 4;
+
+        function toggleNightLight() {
+            isNightLightOn = !isNightLightOn;
+            document.body.classList.toggle('night-light-on', isNightLightOn);
+            nightBtn.textContent = isNightLightOn ? "💡 Night Light: ON" : "💡 Night Light: OFF";
+            nightBtn.style.color = isNightLightOn ? "var(--accent-green)" : "var(--accent-cyan)";
+        }
+
+        function calibratePosture() {
+            if (!isRunning) return;
+            baselineYaw = smoothYaw;
+            baselinePitch = smoothPitch;
+            calibBtn.textContent = "Position Calibrated!";
+            calibBtn.style.color = "var(--accent-green)";
+            setTimeout(() => {
+                calibBtn.textContent = "Set Current as Normal (Center)";
+                calibBtn.style.color = "var(--accent-cyan)";
+            }, 1800);
+        }
+
+        // --- MQTT CONFIGURATION ---
+        const MQTT_BROKER = "broker.hivemq.com";
+        const MQTT_PORT = 8884; 
+        const MQTT_TOPIC = "uem/gesture_robot/cmd_alpha99";
+        const CLIENT_ID = "web_telemetry_" + Math.random().toString(16).substring(2, 10);
+
+        let mqttClient = null;
+        let lastSentAction = "";
+
+        function initMQTT() {
+            try {
+                mqttClient = new Paho.MQTT.Client(MQTT_BROKER, MQTT_PORT, "/mqtt", CLIENT_ID);
+
+                mqttClient.onConnectionLost = () => {
+                    valMqtt.textContent = "Disconnected";
+                    valMqtt.style.color = "var(--accent-red)";
+                    setTimeout(initMQTT, 3000);
+                };
+
+                mqttClient.connect({
+                    useSSL: true,
+                    timeout: 4,
+                    onSuccess: () => {
+                        valMqtt.textContent = "Connected";
+                        valMqtt.style.color = "var(--accent-green)";
+                    },
+                    onFailure: (err) => {
+                        valMqtt.textContent = "Failed";
+                        valMqtt.style.color = "var(--accent-red)";
+                        setTimeout(initMQTT, 6000);
+                    }
+                });
+            } catch (e) {
+                console.error("MQTT Init Error:", e);
+            }
+        }
+
+        function sendCommandOverMQTT(action) {
+            if (!mqttClient || !mqttClient.isConnected()) return;
+
+            if (action !== lastSentAction) {
+                const message = new Paho.MQTT.Message(action);
+                message.destinationName = MQTT_TOPIC;
+                message.qos = 0;
+                message.retained = false;
+                mqttClient.send(message);
+                lastSentAction = action;
+            }
+        }
+
+        initMQTT();
+
+        function getDistance(pt1, pt2) {
+            return Math.hypot(pt1.x - pt2.x, pt1.y - pt2.y);
+        }
+
+        function getEyeAspectRatio(landmarks, topIdx, bottomIdx, leftIdx, rightIdx) {
+            const v = getDistance(landmarks[topIdx], landmarks[bottomIdx]);
+            const h = getDistance(landmarks[leftIdx], landmarks[rightIdx]);
+            return v / h;
+        }
+
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onResults);
+
+        function onResults(results) {
+            if (!videoElement.videoWidth) return;
+
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // Direct render fallback to prevent black frames
+            if (results.image) {
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            } else {
+                canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+
+                const leftEAR = getEyeAspectRatio(landmarks, 159, 145, 33, 133);
+                const rightEAR = getEyeAspectRatio(landmarks, 386, 374, 362, 263);
+                const rawEAR = (leftEAR + rightEAR) / 2;
+
+                const noseX = landmarks[1].x;
+                const rightEdgeX = landmarks[234].x;
+                const leftEdgeX = landmarks[454].x;
+                const faceWidth = Math.abs(leftEdgeX - rightEdgeX);
+                const rawYaw = (noseX - rightEdgeX) / faceWidth;
+
+                const topForeheadY = landmarks[10].y;
+                const bottomChinY = landmarks[152].y;
+                const noseY = landmarks[1].y;
+                const faceHeight = Math.abs(bottomChinY - topForeheadY);
+                const rawPitch = (noseY - topForeheadY) / faceHeight;
+
+                smoothEAR = smoothEAR * (1 - SMOOTH_FACTOR) + rawEAR * SMOOTH_FACTOR;
+                smoothYaw = smoothYaw * (1 - SMOOTH_FACTOR) + rawYaw * SMOOTH_FACTOR;
+                smoothPitch = smoothPitch * (1 - SMOOTH_FACTOR) + rawPitch * SMOOTH_FACTOR;
+
+                const yawDelta = smoothYaw - baselineYaw;
+                const pitchDelta = smoothPitch - baselinePitch;
+
+                const YAW_DEADZONE = 0.11;
+                const PITCH_UP_DEADZONE = 0.10;
+                const PITCH_DOWN_DEADZONE = 0.14;
+
+                let detectedNow = "FORWARD";
+
+                if (smoothEAR < 0.17) {
+                    detectedNow = "STOP";
+                } else if (pitchDelta > PITCH_DOWN_DEADZONE) {
+                    detectedNow = "SPIN_LEFT";
+                } else if (pitchDelta < -PITCH_UP_DEADZONE) {
+                    detectedNow = "SPIN_RIGHT";
+                } else if (yawDelta > YAW_DEADZONE) {
+                    detectedNow = "LEFT";
+                } else if (yawDelta < -YAW_DEADZONE) {
+                    detectedNow = "RIGHT";
+                } else {
+                    detectedNow = "FORWARD";
+                }
+
+                if (detectedNow === candidateCommand) {
+                    candidateCount++;
+                } else {
+                    candidateCommand = detectedNow;
+                    candidateCount = 1;
+                }
+
+                if (candidateCount >= REQUIRED_CONSECUTIVE_FRAMES) {
+                    activeCommand = candidateCommand;
+                }
+
+                valEye.textContent = (smoothEAR < 0.17) ? "CLOSED" : "OPEN";
+                valYaw.textContent = (yawDelta > YAW_DEADZONE) ? "LEFT" : ((yawDelta < -YAW_DEADZONE) ? "RIGHT" : "CENTER");
+                valPitch.textContent = (pitchDelta < -PITCH_UP_DEADZONE) ? "UPWARD" : ((pitchDelta > PITCH_DOWN_DEADZONE) ? "DOWNWARD" : "LEVEL");
+
+                updateCommandUI(activeCommand);
+                sendCommandOverMQTT(activeCommand);
+
+                drawTrackerPoints(landmarks);
+            } else {
+                updateCommandUI("STOP");
+                sendCommandOverMQTT("STOP");
+                valEye.textContent = "--";
+                valYaw.textContent = "--";
+                valPitch.textContent = "--";
+            }
+            canvasCtx.restore();
+        }
+
+        function drawTrackerPoints(landmarks) {
+            const pointsToHighlight = [1, 10, 152, 159, 145, 386, 374, 234, 454];
+            canvasCtx.fillStyle = '#00f2fe';
+            pointsToHighlight.forEach(idx => {
+                const pt = landmarks[idx];
+                canvasCtx.beginPath();
+                canvasCtx.arc(pt.x * canvasElement.width, pt.y * canvasElement.height, 3, 0, 2 * Math.PI);
+                canvasCtx.fill();
+            });
+        }
+
+        function updateCommandUI(cmd) {
+            commandText.textContent = cmd;
+            commandText.className = 'command-value';
+            
+            padForward.classList.remove('active');
+            padLeft.classList.remove('active');
+            padRight.classList.remove('active');
+            padStop.classList.remove('active');
+            padSpinLeft.classList.remove('spin-active');
+            padSpinRight.classList.remove('spin-active');
+
+            if (cmd === 'FORWARD') {
+                commandText.classList.add('cmd-FORWARD');
+                padForward.classList.add('active');
+            } else if (cmd === 'STOP') {
+                commandText.classList.add('cmd-STOP');
+                padStop.classList.add('active');
+            } else if (cmd === 'LEFT') {
+                commandText.classList.add('cmd-LEFT');
+                padLeft.classList.add('active');
+            } else if (cmd === 'RIGHT') {
+                commandText.classList.add('cmd-RIGHT');
+                padRight.classList.add('active');
+            } else if (cmd === 'SPIN_LEFT') {
+                commandText.classList.add('cmd-SPIN_LEFT');
+                padSpinLeft.classList.add('spin-active');
+            } else if (cmd === 'SPIN_RIGHT') {
+                commandText.classList.add('cmd-SPIN_RIGHT');
+                padSpinRight.classList.add('spin-active');
+            }
+        }
+
+        async function toggleCamera() {
+            if (!isRunning) {
+                try {
+                    statusText.textContent = "Loading Model...";
+                    
+                    camera = new Camera(videoElement, {
+                        onFrame: async () => {
+                            await faceMesh.send({ image: videoElement });
+                        },
+                        width: 640,
+                        height: 480
+                    });
+
+                    await camera.start();
+                    isRunning = true;
+                    statusDot.classList.add('active');
+                    statusText.textContent = "Live Tracking";
+                    startBtn.textContent = "Stop Camera";
+                    startBtn.style.background = "#ff1744";
+                } catch (err) {
+                    alert("Webcam error. Make sure other tabs are closed and permissions allowed!");
+                    statusText.textContent = "Camera Error";
+                }
+            } else {
+                if (camera) await camera.stop();
+                isRunning = false;
+                statusDot.classList.remove('active');
+                statusText.textContent = "Camera Inactive";
+                startBtn.textContent = "Start Camera";
+                startBtn.style.background = "";
+                updateCommandUI("IDLE");
+            }
+        }
+    </script>
+</body>
+</html>
