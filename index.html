@@ -21,7 +21,6 @@
             --accent-green: #00e676;
             --accent-red: #ff1744;
             --accent-blue: #2979ff;
-            --accent-purple: #d500f9;
             --text-main: #f0f4f8;
             --text-dim: #8292a2;
         }
@@ -44,7 +43,6 @@
             transition: background-color 0.25s ease;
         }
 
-        /* Virtual Ring Light mode for nighttime illumination */
         body.night-light-on {
             background-color: #ffffff !important;
             box-shadow: inset 0 0 180px 90px #ffffff;
@@ -245,7 +243,7 @@
         }
 
         .command-value {
-            font-size: 2rem;
+            font-size: 2.2rem;
             font-weight: 800;
             letter-spacing: 2px;
             color: var(--accent-cyan);
@@ -255,7 +253,6 @@
         .cmd-FORWARD { color: var(--accent-green) !important; text-shadow: 0 0 15px rgba(0, 230, 118, 0.5) !important; }
         .cmd-STOP { color: var(--accent-red) !important; text-shadow: 0 0 15px rgba(255, 23, 68, 0.5) !important; }
         .cmd-LEFT, .cmd-RIGHT { color: var(--accent-blue) !important; text-shadow: 0 0 15px rgba(41, 121, 255, 0.5) !important; }
-        .cmd-SPIN_LEFT, .cmd-SPIN_RIGHT { color: var(--accent-purple) !important; text-shadow: 0 0 15px rgba(213, 0, 249, 0.5) !important; }
 
         .d-pad {
             display: grid;
@@ -269,11 +266,11 @@
             background: #141c2e;
             border: 1px solid var(--border);
             color: var(--text-dim);
-            padding: 10px 4px;
+            padding: 12px 4px;
             border-radius: 8px;
             text-align: center;
             font-weight: bold;
-            font-size: 0.8rem;
+            font-size: 0.82rem;
             transition: all 0.15s ease;
         }
 
@@ -283,10 +280,20 @@
             box-shadow: 0 0 12px var(--accent-cyan);
         }
 
-        .pad-btn.spin-active {
-            background: var(--accent-purple) !important;
+        .pad-btn.active.cmd-FORWARD {
+            background: var(--accent-green) !important;
+            color: #000 !important;
+            box-shadow: 0 0 12px var(--accent-green) !important;
+        }
+
+        .pad-btn.active.cmd-STOP {
+            background: var(--accent-red) !important;
             color: #fff !important;
-            box-shadow: 0 0 12px var(--accent-purple) !important;
+            box-shadow: 0 0 12px var(--accent-red) !important;
+        }
+
+        .pad-placeholder {
+            visibility: hidden;
         }
 
         .telemetry {
@@ -315,7 +322,7 @@
 
     <header>
         <h1>INTELLIGESTURE CONTROLLER</h1>
-        <p>Real-time client-side face & eye telematics using MediaPipe</p>
+        <p>Cruise Control & Deliberate Stop Telematics</p>
     </header>
 
     <div class="dashboard">
@@ -339,13 +346,14 @@
 
             <div class="command-display" id="command-box">
                 <div class="command-title">Current Action</div>
-                <div class="command-value" id="command-text">IDLE</div>
+                <div class="command-value" id="command-text">STOP</div>
             </div>
 
+            <!-- Clean Cross D-Pad without spins -->
             <div class="d-pad">
-                <div class="pad-btn" id="pad-spin-left">↺ SPIN L</div>
+                <div class="pad-placeholder"></div>
                 <div class="pad-btn" id="pad-forward">▲ FWD</div>
-                <div class="pad-btn" id="pad-spin-right">↻ SPIN R</div>
+                <div class="pad-placeholder"></div>
                 
                 <div class="pad-btn" id="pad-left">◀ LEFT</div>
                 <div class="pad-btn" id="pad-stop">■ STOP</div>
@@ -358,8 +366,12 @@
                     <span class="telemetry-val" id="val-mqtt" style="color: #ff1744;">Disconnected</span>
                 </div>
                 <div class="telemetry-row">
-                    <span>Eye State:</span>
-                    <span class="telemetry-val" id="val-eye">--</span>
+                    <span>Drive Mode:</span>
+                    <span class="telemetry-val" id="val-mode" style="color: var(--accent-red);">STOPPED</span>
+                </div>
+                <div class="telemetry-row">
+                    <span>Eye Status:</span>
+                    <span class="telemetry-val" id="val-eye">OPEN</span>
                 </div>
                 <div class="telemetry-row">
                     <span>Horizontal Turn:</span>
@@ -385,6 +397,7 @@
         const nightBtn = document.getElementById('night-btn');
 
         const valMqtt = document.getElementById('val-mqtt');
+        const valMode = document.getElementById('val-mode');
         const valEye = document.getElementById('val-eye');
         const valYaw = document.getElementById('val-yaw');
         const valPitch = document.getElementById('val-pitch');
@@ -393,13 +406,12 @@
         const padLeft = document.getElementById('pad-left');
         const padRight = document.getElementById('pad-right');
         const padStop = document.getElementById('pad-stop');
-        const padSpinLeft = document.getElementById('pad-spin-left');
-        const padSpinRight = document.getElementById('pad-spin-right');
 
         let camera = null;
         let isRunning = false;
         let isNightLightOn = false;
 
+        // Posture baseline
         let baselineYaw = 0.50;
         let baselinePitch = 0.58; 
 
@@ -408,10 +420,13 @@
         let smoothPitch = 0.58;
         const SMOOTH_FACTOR = 0.35;
 
+        // Cruise Control & Deliberate Stop States
+        let isCruising = false;
+        let eyeClosedStartTime = null;
+        const EYE_STOP_THRESHOLD_MS = 1200; // Must hold closed for 1.2s to stop (ignores natural blinks)
+
         let activeCommand = "STOP";
-        let candidateCommand = "STOP";
-        let candidateCount = 0;
-        const REQUIRED_CONSECUTIVE_FRAMES = 4;
+        let lastSentAction = "";
 
         function toggleNightLight() {
             isNightLightOn = !isNightLightOn;
@@ -439,7 +454,6 @@
         const CLIENT_ID = "web_telemetry_" + Math.random().toString(16).substring(2, 10);
 
         let mqttClient = null;
-        let lastSentAction = "";
 
         function initMQTT() {
             try {
@@ -458,7 +472,7 @@
                         valMqtt.textContent = "Connected";
                         valMqtt.style.color = "var(--accent-green)";
                     },
-                    onFailure: (err) => {
+                    onFailure: () => {
                         valMqtt.textContent = "Failed";
                         valMqtt.style.color = "var(--accent-red)";
                         setTimeout(initMQTT, 6000);
@@ -516,7 +530,6 @@
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
-            // Direct render fallback to prevent black frames
             if (results.image) {
                 canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
             } else {
@@ -551,46 +564,71 @@
 
                 const YAW_DEADZONE = 0.11;
                 const PITCH_UP_DEADZONE = 0.10;
-                const PITCH_DOWN_DEADZONE = 0.14;
 
-                let detectedNow = "FORWARD";
+                // 1. Long Eye Closure Tracking (Deliberate Stop)
+                const eyesCurrentlyClosed = smoothEAR < 0.17;
+                let eyesTriggeredStop = false;
 
-                if (smoothEAR < 0.17) {
-                    detectedNow = "STOP";
-                } else if (pitchDelta > PITCH_DOWN_DEADZONE) {
-                    detectedNow = "SPIN_LEFT";
-                } else if (pitchDelta < -PITCH_UP_DEADZONE) {
-                    detectedNow = "SPIN_RIGHT";
+                if (eyesCurrentlyClosed) {
+                    if (!eyeClosedStartTime) {
+                        eyeClosedStartTime = performance.now();
+                    }
+                    const closedDuration = performance.now() - eyeClosedStartTime;
+                    
+                    if (closedDuration >= EYE_STOP_THRESHOLD_MS) {
+                        // User held eyes closed for >= 1.2s -> Cancel Cruise & Stop
+                        isCruising = false;
+                        eyesTriggeredStop = true;
+                        valEye.textContent = "STOP TRIGGERED";
+                        valEye.style.color = "var(--accent-red)";
+                    } else {
+                        valEye.textContent = "CLOSING...";
+                        valEye.style.color = "var(--accent-cyan)";
+                    }
+                } else {
+                    eyeClosedStartTime = null;
+                    valEye.textContent = "OPEN";
+                    valEye.style.color = "var(--text-main)";
+                }
+
+                // 2. Head Upward Ignition (Starts Cruise Control)
+                if (pitchDelta < -PITCH_UP_DEADZONE && !eyesCurrentlyClosed) {
+                    isCruising = true; // Latches driving mode ON
+                }
+
+                // 3. Action Arbitration
+                let detectedAction = "STOP";
+
+                if (eyesTriggeredStop || !isCruising) {
+                    detectedAction = "STOP";
                 } else if (yawDelta > YAW_DEADZONE) {
-                    detectedNow = "LEFT";
+                    detectedAction = "LEFT";
                 } else if (yawDelta < -YAW_DEADZONE) {
-                    detectedNow = "RIGHT";
+                    detectedAction = "RIGHT";
                 } else {
-                    detectedNow = "FORWARD";
+                    // Head is in normal/resting posture or returning down: keep cruising forward
+                    detectedAction = "FORWARD";
                 }
 
-                if (detectedNow === candidateCommand) {
-                    candidateCount++;
-                } else {
-                    candidateCommand = detectedNow;
-                    candidateCount = 1;
-                }
+                activeCommand = detectedAction;
 
-                if (candidateCount >= REQUIRED_CONSECUTIVE_FRAMES) {
-                    activeCommand = candidateCommand;
-                }
-
-                valEye.textContent = (smoothEAR < 0.17) ? "CLOSED" : "OPEN";
+                // Update Telemetry
+                valMode.textContent = isCruising ? "CRUISING (FWD)" : "STOPPED";
+                valMode.style.color = isCruising ? "var(--accent-green)" : "var(--accent-red)";
                 valYaw.textContent = (yawDelta > YAW_DEADZONE) ? "LEFT" : ((yawDelta < -YAW_DEADZONE) ? "RIGHT" : "CENTER");
-                valPitch.textContent = (pitchDelta < -PITCH_UP_DEADZONE) ? "UPWARD" : ((pitchDelta > PITCH_DOWN_DEADZONE) ? "DOWNWARD" : "LEVEL");
+                valPitch.textContent = (pitchDelta < -PITCH_UP_DEADZONE) ? "UPWARD (IGNITE)" : "NORMAL / LEVEL";
 
                 updateCommandUI(activeCommand);
                 sendCommandOverMQTT(activeCommand);
 
                 drawTrackerPoints(landmarks);
             } else {
+                // Safety: Face absent drops to immediate STOP
+                isCruising = false;
                 updateCommandUI("STOP");
                 sendCommandOverMQTT("STOP");
+                valMode.textContent = "STOPPED";
+                valMode.style.color = "var(--accent-red)";
                 valEye.textContent = "--";
                 valYaw.textContent = "--";
                 valPitch.textContent = "--";
@@ -613,31 +651,23 @@
             commandText.textContent = cmd;
             commandText.className = 'command-value';
             
-            padForward.classList.remove('active');
+            padForward.classList.remove('active', 'cmd-FORWARD');
             padLeft.classList.remove('active');
             padRight.classList.remove('active');
-            padStop.classList.remove('active');
-            padSpinLeft.classList.remove('spin-active');
-            padSpinRight.classList.remove('spin-active');
+            padStop.classList.remove('active', 'cmd-STOP');
 
             if (cmd === 'FORWARD') {
                 commandText.classList.add('cmd-FORWARD');
-                padForward.classList.add('active');
+                padForward.classList.add('active', 'cmd-FORWARD');
             } else if (cmd === 'STOP') {
                 commandText.classList.add('cmd-STOP');
-                padStop.classList.add('active');
+                padStop.classList.add('active', 'cmd-STOP');
             } else if (cmd === 'LEFT') {
                 commandText.classList.add('cmd-LEFT');
                 padLeft.classList.add('active');
             } else if (cmd === 'RIGHT') {
                 commandText.classList.add('cmd-RIGHT');
                 padRight.classList.add('active');
-            } else if (cmd === 'SPIN_LEFT') {
-                commandText.classList.add('cmd-SPIN_LEFT');
-                padSpinLeft.classList.add('spin-active');
-            } else if (cmd === 'SPIN_RIGHT') {
-                commandText.classList.add('cmd-SPIN_RIGHT');
-                padSpinRight.classList.add('spin-active');
             }
         }
 
@@ -661,17 +691,19 @@
                     startBtn.textContent = "Stop Camera";
                     startBtn.style.background = "#ff1744";
                 } catch (err) {
-                    alert("Webcam error. Make sure other tabs are closed and permissions allowed!");
+                    alert("Webcam error. Make sure permissions are granted!");
                     statusText.textContent = "Camera Error";
                 }
             } else {
                 if (camera) await camera.stop();
                 isRunning = false;
+                isCruising = false;
                 statusDot.classList.remove('active');
                 statusText.textContent = "Camera Inactive";
                 startBtn.textContent = "Start Camera";
                 startBtn.style.background = "";
-                updateCommandUI("IDLE");
+                updateCommandUI("STOP");
+                sendCommandOverMQTT("STOP");
             }
         }
     </script>
