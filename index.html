@@ -50,34 +50,20 @@
             color: #0f172a !important;
         }
 
-        body.night-light-on header h1 {
-            color: #0284c7 !important;
-        }
-
-        body.night-light-on header p {
-            color: #475569 !important;
-        }
-
+        body.night-light-on header h1 { color: #0284c7 !important; }
+        body.night-light-on header p { color: #475569 !important; }
         body.night-light-on .panel,
         body.night-light-on .video-card {
             background: #ffffff !important;
             border: 2px solid #cbd5e1 !important;
             box-shadow: 0 10px 35px rgba(0, 0, 0, 0.1) !important;
         }
-
         body.night-light-on .command-display {
             background: #f8fafc !important;
             border-color: #cbd5e1 !important;
         }
-
-        body.night-light-on .telemetry-row {
-            border-bottom: 1px dashed #cbd5e1 !important;
-        }
-
-        body.night-light-on .telemetry-val {
-            color: #0f172a !important;
-        }
-
+        body.night-light-on .telemetry-row { border-bottom: 1px dashed #cbd5e1 !important; }
+        body.night-light-on .telemetry-val { color: #0f172a !important; }
         body.night-light-on .pad-btn {
             background: #f1f5f9 !important;
             color: #334155 !important;
@@ -111,9 +97,7 @@
         }
 
         @media (max-width: 900px) {
-            .dashboard {
-                grid-template-columns: 1fr;
-            }
+            .dashboard { grid-template-columns: 1fr; }
         }
 
         .video-card {
@@ -139,7 +123,6 @@
         }
 
         video { display: none; }
-
         canvas {
             width: 100%;
             height: 100%;
@@ -233,6 +216,10 @@
             border: 2px solid var(--border);
             border-radius: 12px;
             transition: all 0.2s ease;
+            min-height: 94px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .command-title {
@@ -244,11 +231,17 @@
         }
 
         .command-value {
-            font-size: 2.2rem;
+            font-size: 2.1rem;
             font-weight: 800;
-            letter-spacing: 2px;
+            letter-spacing: 1.5px;
             color: var(--accent-cyan);
             text-shadow: 0 0 15px rgba(0, 242, 254, 0.4);
+        }
+
+        .command-value.warning-subtext {
+            font-size: 1.25rem !important;
+            letter-spacing: 1px;
+            line-height: 1.3;
         }
 
         .cmd-FORWARD { color: var(--accent-green) !important; text-shadow: 0 0 15px rgba(0, 230, 118, 0.5) !important; }
@@ -300,9 +293,7 @@
             box-shadow: 0 0 12px var(--accent-red) !important;
         }
 
-        .pad-placeholder {
-            visibility: hidden;
-        }
+        .pad-placeholder { visibility: hidden; }
 
         .telemetry {
             display: flex;
@@ -330,7 +321,7 @@
 
     <header>
         <h1>INTELLIGESTURE CONTROLLER</h1>
-        <p>Cruise Control, Reverse & Deliberate Stop Telematics</p>
+        <p>Active Obstacle Intercept & Spatial Telematics</p>
     </header>
 
     <div class="dashboard">
@@ -357,7 +348,6 @@
                 <div class="command-value" id="command-text">STOP</div>
             </div>
 
-            <!-- Complete Cross D-Pad with Forward, Reverse, Left, Right & Stop -->
             <div class="d-pad">
                 <div class="pad-placeholder"></div>
                 <div class="pad-btn" id="pad-forward">▲ FWD</div>
@@ -378,7 +368,11 @@
                     <span class="telemetry-val" id="val-mqtt" style="color: #ff1744;">Disconnected</span>
                 </div>
                 <div class="telemetry-row">
-                    <span>Drive Mode:</span>
+                    <span>Sensor Feedback:</span>
+                    <span class="telemetry-val" id="val-sensor" style="color: var(--accent-green);">CLEAR</span>
+                </div>
+                <div class="telemetry-row">
+                    <span>Drive State:</span>
                     <span class="telemetry-val" id="val-mode" style="color: var(--accent-red);">STOPPED</span>
                 </div>
                 <div class="telemetry-row">
@@ -388,10 +382,6 @@
                 <div class="telemetry-row">
                     <span>Horizontal Turn:</span>
                     <span class="telemetry-val" id="val-yaw">CENTER</span>
-                </div>
-                <div class="telemetry-row">
-                    <span>Vertical Pitch:</span>
-                    <span class="telemetry-val" id="val-pitch">LEVEL</span>
                 </div>
             </div>
         </div>
@@ -409,10 +399,10 @@
         const nightBtn = document.getElementById('night-btn');
 
         const valMqtt = document.getElementById('val-mqtt');
+        const valSensor = document.getElementById('val-sensor');
         const valMode = document.getElementById('val-mode');
         const valEye = document.getElementById('val-eye');
         const valYaw = document.getElementById('val-yaw');
-        const valPitch = document.getElementById('val-pitch');
 
         const padForward = document.getElementById('pad-forward');
         const padBackward = document.getElementById('pad-backward');
@@ -424,7 +414,6 @@
         let isRunning = false;
         let isNightLightOn = false;
 
-        // Posture baseline
         let baselineYaw = 0.50;
         let baselinePitch = 0.58; 
 
@@ -433,10 +422,12 @@
         let smoothPitch = 0.58;
         const SMOOTH_FACTOR = 0.35;
 
-        // Cruise Control & Deliberate Stop States
         let isCruising = false;
         let eyeClosedStartTime = null;
-        const EYE_STOP_THRESHOLD_MS = 1200; // Hold eyes closed 1.2s to stop (bypasses regular blinks)
+        const EYE_STOP_THRESHOLD_MS = 1200;
+
+        // Hardware Sensor State
+        let obstacleDetected = false;
 
         let activeCommand = "STOP";
         let lastSentAction = "";
@@ -460,10 +451,11 @@
             }, 1800);
         }
 
-        // --- MQTT CONFIGURATION ---
+        // --- MQTT TOPICS & PROTOCOL ---
         const MQTT_BROKER = "broker.hivemq.com";
         const MQTT_PORT = 8884; 
-        const MQTT_TOPIC = "uem/gesture_robot/cmd_alpha99";
+        const MQTT_CMD_TOPIC = "uem/gesture_robot/cmd_alpha99";         // Browser -> ESP32
+        const MQTT_FEEDBACK_TOPIC = "uem/gesture_robot/status_alpha99"; // ESP32 -> Browser
         const CLIENT_ID = "web_telemetry_" + Math.random().toString(16).substring(2, 10);
 
         let mqttClient = null;
@@ -478,12 +470,32 @@
                     setTimeout(initMQTT, 3000);
                 };
 
+                // Incoming feedback from ESP32 ultrasonic sensor
+                mqttClient.onMessageArrived = (message) => {
+                    if (message.destinationName === MQTT_FEEDBACK_TOPIC) {
+                        const payload = message.payloadString.trim().toUpperCase();
+                        
+                        if (payload === "OBSTACLE" || payload === "BLOCKED" || payload === "1") {
+                            obstacleDetected = true;
+                            isCruising = false; // Immediately trip and cancel forward cruise
+                            valSensor.textContent = "OBJECT IN FRONT";
+                            valSensor.style.color = "var(--accent-red)";
+                        } else if (payload === "CLEAR" || payload === "0") {
+                            obstacleDetected = false;
+                            valSensor.textContent = "CLEAR";
+                            valSensor.style.color = "var(--accent-green)";
+                        }
+                    }
+                };
+
                 mqttClient.connect({
                     useSSL: true,
                     timeout: 4,
                     onSuccess: () => {
                         valMqtt.textContent = "Connected";
                         valMqtt.style.color = "var(--accent-green)";
+                        // Subscribe to the ultrasonic sensor feedback topic
+                        mqttClient.subscribe(MQTT_FEEDBACK_TOPIC);
                     },
                     onFailure: () => {
                         valMqtt.textContent = "Failed";
@@ -501,7 +513,7 @@
 
             if (action !== lastSentAction) {
                 const message = new Paho.MQTT.Message(action);
-                message.destinationName = MQTT_TOPIC;
+                message.destinationName = MQTT_CMD_TOPIC;
                 message.qos = 0;
                 message.retained = false;
                 mqttClient.send(message);
@@ -584,9 +596,7 @@
                 let eyesTriggeredStop = false;
 
                 if (eyesCurrentlyClosed) {
-                    if (!eyeClosedStartTime) {
-                        eyeClosedStartTime = performance.now();
-                    }
+                    if (!eyeClosedStartTime) eyeClosedStartTime = performance.now();
                     const closedDuration = performance.now() - eyeClosedStartTime;
                     
                     if (closedDuration >= EYE_STOP_THRESHOLD_MS) {
@@ -604,27 +614,30 @@
                     valEye.style.color = "var(--text-main)";
                 }
 
-                // 2. Pitch State Evaluation
+                // 2. Pitch State Evaluation (Cruise Control Forward)
                 if (pitchDelta < -PITCH_UP_DEADZONE && !eyesCurrentlyClosed) {
-                    // Head UP: Starts Forward Cruise
-                    isCruising = true;
+                    if (!obstacleDetected) {
+                        isCruising = true; // Ignites forward cruise only if path is clear
+                    }
                 } else if (pitchDelta > PITCH_DOWN_DEADZONE && !eyesCurrentlyClosed) {
-                    // Head DOWN: Immediately cancels Forward Cruise to reverse safely
-                    isCruising = false;
+                    isCruising = false; // Head down immediately resets forward cruise
                 }
 
-                // 3. Action Arbitration
+                // 3. Action Arbitration with Object Intercept
                 let detectedAction = "STOP";
 
                 if (eyesTriggeredStop) {
                     detectedAction = "STOP";
                 } else if (pitchDelta > PITCH_DOWN_DEADZONE) {
+                    // Reverse is unconditionally allowed to back away from walls
                     detectedAction = "BACKWARD";
-                } else if (yawDelta > YAW_DEADZONE && isCruising) {
+                } else if (yawDelta > YAW_DEADZONE) {
+                    // Left steering allowed even when front is obstructed
                     detectedAction = "LEFT";
-                } else if (yawDelta < -YAW_DEADZONE && isCruising) {
+                } else if (yawDelta < -YAW_DEADZONE) {
+                    // Right steering allowed even when front is obstructed
                     detectedAction = "RIGHT";
-                } else if (isCruising) {
+                } else if (isCruising && !obstacleDetected) {
                     detectedAction = "FORWARD";
                 } else {
                     detectedAction = "STOP";
@@ -632,25 +645,23 @@
 
                 activeCommand = detectedAction;
 
-                // Update Telemetry
+                // Update Telemetry & UI
                 valMode.textContent = isCruising ? "CRUISING (FWD)" : (detectedAction === "BACKWARD" ? "REVERSING" : "STOPPED");
                 valMode.style.color = isCruising ? "var(--accent-green)" : (detectedAction === "BACKWARD" ? "var(--accent-orange)" : "var(--accent-red)");
                 valYaw.textContent = (yawDelta > YAW_DEADZONE) ? "LEFT" : ((yawDelta < -YAW_DEADZONE) ? "RIGHT" : "CENTER");
-                valPitch.textContent = (pitchDelta < -PITCH_UP_DEADZONE) ? "UPWARD (FWD)" : ((pitchDelta > PITCH_DOWN_DEADZONE) ? "DOWNWARD (REV)" : "LEVEL");
 
-                updateCommandUI(activeCommand);
+                updateCommandUI(activeCommand, obstacleDetected);
                 sendCommandOverMQTT(activeCommand);
 
                 drawTrackerPoints(landmarks);
             } else {
                 isCruising = false;
-                updateCommandUI("STOP");
+                updateCommandUI("STOP", obstacleDetected);
                 sendCommandOverMQTT("STOP");
                 valMode.textContent = "STOPPED";
                 valMode.style.color = "var(--accent-red)";
                 valEye.textContent = "--";
                 valYaw.textContent = "--";
-                valPitch.textContent = "--";
             }
             canvasCtx.restore();
         }
@@ -666,8 +677,7 @@
             });
         }
 
-        function updateCommandUI(cmd) {
-            commandText.textContent = cmd;
+        function updateCommandUI(cmd, isBlocked) {
             commandText.className = 'command-value';
             
             padForward.classList.remove('active', 'cmd-FORWARD');
@@ -676,19 +686,28 @@
             padRight.classList.remove('active');
             padStop.classList.remove('active', 'cmd-STOP');
 
-            if (cmd === 'FORWARD') {
+            if (cmd === 'STOP' && isBlocked) {
+                commandText.textContent = "STOP (OBJECT IN FRONT)";
+                commandText.classList.add('cmd-STOP', 'warning-subtext');
+                padStop.classList.add('active', 'cmd-STOP');
+            } else if (cmd === 'FORWARD') {
+                commandText.textContent = 'FORWARD';
                 commandText.classList.add('cmd-FORWARD');
                 padForward.classList.add('active', 'cmd-FORWARD');
             } else if (cmd === 'BACKWARD') {
+                commandText.textContent = 'BACKWARD';
                 commandText.classList.add('cmd-BACKWARD');
                 padBackward.classList.add('active', 'cmd-BACKWARD');
             } else if (cmd === 'STOP') {
+                commandText.textContent = 'STOP';
                 commandText.classList.add('cmd-STOP');
                 padStop.classList.add('active', 'cmd-STOP');
             } else if (cmd === 'LEFT') {
+                commandText.textContent = 'LEFT';
                 commandText.classList.add('cmd-LEFT');
                 padLeft.classList.add('active');
             } else if (cmd === 'RIGHT') {
+                commandText.textContent = 'RIGHT';
                 commandText.classList.add('cmd-RIGHT');
                 padRight.classList.add('active');
             }
@@ -698,15 +717,11 @@
             if (!isRunning) {
                 try {
                     statusText.textContent = "Loading Model...";
-                    
                     camera = new Camera(videoElement, {
-                        onFrame: async () => {
-                            await faceMesh.send({ image: videoElement });
-                        },
+                        onFrame: async () => { await faceMesh.send({ image: videoElement }); },
                         width: 640,
                         height: 480
                     });
-
                     await camera.start();
                     isRunning = true;
                     statusDot.classList.add('active');
@@ -714,7 +729,7 @@
                     startBtn.textContent = "Stop Camera";
                     startBtn.style.background = "#ff1744";
                 } catch (err) {
-                    alert("Webcam error. Make sure permissions are granted!");
+                    alert("Webcam error. Ensure permissions are granted!");
                     statusText.textContent = "Camera Error";
                 }
             } else {
@@ -725,7 +740,7 @@
                 statusText.textContent = "Camera Inactive";
                 startBtn.textContent = "Start Camera";
                 startBtn.style.background = "";
-                updateCommandUI("STOP");
+                updateCommandUI("STOP", obstacleDetected);
                 sendCommandOverMQTT("STOP");
             }
         }
