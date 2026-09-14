@@ -216,7 +216,7 @@
             border: 2px solid var(--border);
             border-radius: 12px;
             transition: all 0.2s ease;
-            min-height: 94px;
+            min-height: 96px;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -239,9 +239,9 @@
         }
 
         .command-value.warning-subtext {
-            font-size: 1.25rem !important;
+            font-size: 1.15rem !important;
             letter-spacing: 1px;
-            line-height: 1.3;
+            line-height: 1.35;
         }
 
         .cmd-FORWARD { color: var(--accent-green) !important; text-shadow: 0 0 15px rgba(0, 230, 118, 0.5) !important; }
@@ -451,7 +451,7 @@
             }, 1800);
         }
 
-        // --- MQTT TOPICS & PROTOCOL ---
+        // --- MQTT CONFIGURATION ---
         const MQTT_BROKER = "broker.hivemq.com";
         const MQTT_PORT = 8884; 
         const MQTT_CMD_TOPIC = "uem/gesture_robot/cmd_alpha99";         // Browser -> ESP32
@@ -470,14 +470,13 @@
                     setTimeout(initMQTT, 3000);
                 };
 
-                // Incoming feedback from ESP32 ultrasonic sensor
                 mqttClient.onMessageArrived = (message) => {
                     if (message.destinationName === MQTT_FEEDBACK_TOPIC) {
                         const payload = message.payloadString.trim().toUpperCase();
                         
                         if (payload === "OBSTACLE" || payload === "BLOCKED" || payload === "1") {
                             obstacleDetected = true;
-                            isCruising = false; // Immediately trip and cancel forward cruise
+                            isCruising = false; // Disengage forward cruise
                             valSensor.textContent = "OBJECT IN FRONT";
                             valSensor.style.color = "var(--accent-red)";
                         } else if (payload === "CLEAR" || payload === "0") {
@@ -494,7 +493,6 @@
                     onSuccess: () => {
                         valMqtt.textContent = "Connected";
                         valMqtt.style.color = "var(--accent-green)";
-                        // Subscribe to the ultrasonic sensor feedback topic
                         mqttClient.subscribe(MQTT_FEEDBACK_TOPIC);
                     },
                     onFailure: () => {
@@ -614,32 +612,36 @@
                     valEye.style.color = "var(--text-main)";
                 }
 
-                // 2. Pitch State Evaluation (Cruise Control Forward)
+                // 2. Pitch State Evaluation
                 if (pitchDelta < -PITCH_UP_DEADZONE && !eyesCurrentlyClosed) {
+                    // Head UP: Ignites forward cruise only if path is clear
                     if (!obstacleDetected) {
-                        isCruising = true; // Ignites forward cruise only if path is clear
+                        isCruising = true;
                     }
                 } else if (pitchDelta > PITCH_DOWN_DEADZONE && !eyesCurrentlyClosed) {
-                    isCruising = false; // Head down immediately resets forward cruise
+                    // Head DOWN: Disengages cruise
+                    isCruising = false;
                 }
 
-                // 3. Action Arbitration with Object Intercept
+                // 3. Directional Arbitration
                 let detectedAction = "STOP";
 
                 if (eyesTriggeredStop) {
                     detectedAction = "STOP";
                 } else if (pitchDelta > PITCH_DOWN_DEADZONE) {
-                    // Reverse is unconditionally allowed to back away from walls
+                    // Head DOWN -> BACKWARD (always available)
                     detectedAction = "BACKWARD";
                 } else if (yawDelta > YAW_DEADZONE) {
-                    // Left steering allowed even when front is obstructed
+                    // Head LEFT -> LEFT (always available)
                     detectedAction = "LEFT";
                 } else if (yawDelta < -YAW_DEADZONE) {
-                    // Right steering allowed even when front is obstructed
+                    // Head RIGHT -> RIGHT (always available)
                     detectedAction = "RIGHT";
                 } else if (isCruising && !obstacleDetected) {
+                    // Head NEUTRAL while cruising forward -> FORWARD
                     detectedAction = "FORWARD";
                 } else {
+                    // Neutral when stopped or when blocked by obstacle -> STOP
                     detectedAction = "STOP";
                 }
 
@@ -686,9 +688,14 @@
             padRight.classList.remove('active');
             padStop.classList.remove('active', 'cmd-STOP');
 
-            if (cmd === 'STOP' && isBlocked) {
-                commandText.textContent = "STOP (OBJECT IN FRONT)";
-                commandText.classList.add('cmd-STOP', 'warning-subtext');
+            if (cmd === 'STOP') {
+                if (isBlocked) {
+                    commandText.textContent = "STOP (OBJECT OR WALL IN FRONT)";
+                    commandText.classList.add('cmd-STOP', 'warning-subtext');
+                } else {
+                    commandText.textContent = 'STOP';
+                    commandText.classList.add('cmd-STOP');
+                }
                 padStop.classList.add('active', 'cmd-STOP');
             } else if (cmd === 'FORWARD') {
                 commandText.textContent = 'FORWARD';
@@ -698,10 +705,6 @@
                 commandText.textContent = 'BACKWARD';
                 commandText.classList.add('cmd-BACKWARD');
                 padBackward.classList.add('active', 'cmd-BACKWARD');
-            } else if (cmd === 'STOP') {
-                commandText.textContent = 'STOP';
-                commandText.classList.add('cmd-STOP');
-                padStop.classList.add('active', 'cmd-STOP');
             } else if (cmd === 'LEFT') {
                 commandText.textContent = 'LEFT';
                 commandText.classList.add('cmd-LEFT');
