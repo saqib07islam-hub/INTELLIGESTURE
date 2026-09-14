@@ -21,6 +21,7 @@
             --accent-green: #00e676;
             --accent-red: #ff1744;
             --accent-blue: #2979ff;
+            --accent-orange: #ff9100;
             --text-main: #f0f4f8;
             --text-dim: #8292a2;
         }
@@ -251,6 +252,7 @@
         }
 
         .cmd-FORWARD { color: var(--accent-green) !important; text-shadow: 0 0 15px rgba(0, 230, 118, 0.5) !important; }
+        .cmd-BACKWARD { color: var(--accent-orange) !important; text-shadow: 0 0 15px rgba(255, 145, 0, 0.5) !important; }
         .cmd-STOP { color: var(--accent-red) !important; text-shadow: 0 0 15px rgba(255, 23, 68, 0.5) !important; }
         .cmd-LEFT, .cmd-RIGHT { color: var(--accent-blue) !important; text-shadow: 0 0 15px rgba(41, 121, 255, 0.5) !important; }
 
@@ -284,6 +286,12 @@
             background: var(--accent-green) !important;
             color: #000 !important;
             box-shadow: 0 0 12px var(--accent-green) !important;
+        }
+
+        .pad-btn.active.cmd-BACKWARD {
+            background: var(--accent-orange) !important;
+            color: #000 !important;
+            box-shadow: 0 0 12px var(--accent-orange) !important;
         }
 
         .pad-btn.active.cmd-STOP {
@@ -322,7 +330,7 @@
 
     <header>
         <h1>INTELLIGESTURE CONTROLLER</h1>
-        <p>Cruise Control & Deliberate Stop Telematics</p>
+        <p>Cruise Control, Reverse & Deliberate Stop Telematics</p>
     </header>
 
     <div class="dashboard">
@@ -349,7 +357,7 @@
                 <div class="command-value" id="command-text">STOP</div>
             </div>
 
-            <!-- Clean Cross D-Pad without spins -->
+            <!-- Complete Cross D-Pad with Forward, Reverse, Left, Right & Stop -->
             <div class="d-pad">
                 <div class="pad-placeholder"></div>
                 <div class="pad-btn" id="pad-forward">▲ FWD</div>
@@ -358,6 +366,10 @@
                 <div class="pad-btn" id="pad-left">◀ LEFT</div>
                 <div class="pad-btn" id="pad-stop">■ STOP</div>
                 <div class="pad-btn" id="pad-right">RIGHT ▶</div>
+
+                <div class="pad-placeholder"></div>
+                <div class="pad-btn" id="pad-backward">▼ REV</div>
+                <div class="pad-placeholder"></div>
             </div>
 
             <div class="telemetry">
@@ -403,6 +415,7 @@
         const valPitch = document.getElementById('val-pitch');
 
         const padForward = document.getElementById('pad-forward');
+        const padBackward = document.getElementById('pad-backward');
         const padLeft = document.getElementById('pad-left');
         const padRight = document.getElementById('pad-right');
         const padStop = document.getElementById('pad-stop');
@@ -423,7 +436,7 @@
         // Cruise Control & Deliberate Stop States
         let isCruising = false;
         let eyeClosedStartTime = null;
-        const EYE_STOP_THRESHOLD_MS = 1200; // Must hold closed for 1.2s to stop (ignores natural blinks)
+        const EYE_STOP_THRESHOLD_MS = 1200; // Hold eyes closed 1.2s to stop (bypasses regular blinks)
 
         let activeCommand = "STOP";
         let lastSentAction = "";
@@ -564,6 +577,7 @@
 
                 const YAW_DEADZONE = 0.11;
                 const PITCH_UP_DEADZONE = 0.10;
+                const PITCH_DOWN_DEADZONE = 0.14;
 
                 // 1. Long Eye Closure Tracking (Deliberate Stop)
                 const eyesCurrentlyClosed = smoothEAR < 0.17;
@@ -576,7 +590,6 @@
                     const closedDuration = performance.now() - eyeClosedStartTime;
                     
                     if (closedDuration >= EYE_STOP_THRESHOLD_MS) {
-                        // User held eyes closed for >= 1.2s -> Cancel Cruise & Stop
                         isCruising = false;
                         eyesTriggeredStop = true;
                         valEye.textContent = "STOP TRIGGERED";
@@ -591,39 +604,45 @@
                     valEye.style.color = "var(--text-main)";
                 }
 
-                // 2. Head Upward Ignition (Starts Cruise Control)
+                // 2. Pitch State Evaluation
                 if (pitchDelta < -PITCH_UP_DEADZONE && !eyesCurrentlyClosed) {
-                    isCruising = true; // Latches driving mode ON
+                    // Head UP: Starts Forward Cruise
+                    isCruising = true;
+                } else if (pitchDelta > PITCH_DOWN_DEADZONE && !eyesCurrentlyClosed) {
+                    // Head DOWN: Immediately cancels Forward Cruise to reverse safely
+                    isCruising = false;
                 }
 
                 // 3. Action Arbitration
                 let detectedAction = "STOP";
 
-                if (eyesTriggeredStop || !isCruising) {
+                if (eyesTriggeredStop) {
                     detectedAction = "STOP";
-                } else if (yawDelta > YAW_DEADZONE) {
+                } else if (pitchDelta > PITCH_DOWN_DEADZONE) {
+                    detectedAction = "BACKWARD";
+                } else if (yawDelta > YAW_DEADZONE && isCruising) {
                     detectedAction = "LEFT";
-                } else if (yawDelta < -YAW_DEADZONE) {
+                } else if (yawDelta < -YAW_DEADZONE && isCruising) {
                     detectedAction = "RIGHT";
-                } else {
-                    // Head is in normal/resting posture or returning down: keep cruising forward
+                } else if (isCruising) {
                     detectedAction = "FORWARD";
+                } else {
+                    detectedAction = "STOP";
                 }
 
                 activeCommand = detectedAction;
 
                 // Update Telemetry
-                valMode.textContent = isCruising ? "CRUISING (FWD)" : "STOPPED";
-                valMode.style.color = isCruising ? "var(--accent-green)" : "var(--accent-red)";
+                valMode.textContent = isCruising ? "CRUISING (FWD)" : (detectedAction === "BACKWARD" ? "REVERSING" : "STOPPED");
+                valMode.style.color = isCruising ? "var(--accent-green)" : (detectedAction === "BACKWARD" ? "var(--accent-orange)" : "var(--accent-red)");
                 valYaw.textContent = (yawDelta > YAW_DEADZONE) ? "LEFT" : ((yawDelta < -YAW_DEADZONE) ? "RIGHT" : "CENTER");
-                valPitch.textContent = (pitchDelta < -PITCH_UP_DEADZONE) ? "UPWARD (IGNITE)" : "NORMAL / LEVEL";
+                valPitch.textContent = (pitchDelta < -PITCH_UP_DEADZONE) ? "UPWARD (FWD)" : ((pitchDelta > PITCH_DOWN_DEADZONE) ? "DOWNWARD (REV)" : "LEVEL");
 
                 updateCommandUI(activeCommand);
                 sendCommandOverMQTT(activeCommand);
 
                 drawTrackerPoints(landmarks);
             } else {
-                // Safety: Face absent drops to immediate STOP
                 isCruising = false;
                 updateCommandUI("STOP");
                 sendCommandOverMQTT("STOP");
@@ -652,6 +671,7 @@
             commandText.className = 'command-value';
             
             padForward.classList.remove('active', 'cmd-FORWARD');
+            padBackward.classList.remove('active', 'cmd-BACKWARD');
             padLeft.classList.remove('active');
             padRight.classList.remove('active');
             padStop.classList.remove('active', 'cmd-STOP');
@@ -659,6 +679,9 @@
             if (cmd === 'FORWARD') {
                 commandText.classList.add('cmd-FORWARD');
                 padForward.classList.add('active', 'cmd-FORWARD');
+            } else if (cmd === 'BACKWARD') {
+                commandText.classList.add('cmd-BACKWARD');
+                padBackward.classList.add('active', 'cmd-BACKWARD');
             } else if (cmd === 'STOP') {
                 commandText.classList.add('cmd-STOP');
                 padStop.classList.add('active', 'cmd-STOP');
